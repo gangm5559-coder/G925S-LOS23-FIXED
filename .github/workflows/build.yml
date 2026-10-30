@@ -1,4 +1,4 @@
-name: Build LOS 23.2 zerolteskt G925S FIXED v4 - Manual Free
+name: Build LOS 23.2 zerolteskt G925S FIXED v5 - Clear Runner Cache
 
 on:
   workflow_dispatch:
@@ -7,10 +7,15 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Manual free disk - BEFORE anything
+      - name: Clear runner diag cache BEFORE anything
         run: |
+          echo "Clearing runner cached diag that causes No space error..."
+          sudo rm -rf /home/runner/actions-runner/cached/2.338.0/_diag/* || true
+          sudo rm -rf /home/runner/actions-runner/cached/* || true
+          sudo rm -rf /home/runner/.cache/* || true
+          sudo rm -rf /home/runner/work/_temp/_github_home/.cache/* || true
+          sudo rm -rf /home/runner/work/_temp/* || true
           df -h
-          echo "Cleaning before maximize..."
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
@@ -56,7 +61,6 @@ jobs:
           </manifest>
           EOF
           cat ~/lineage/.repo/local_manifests/roomservice.xml
-          df -h
 
       - name: Repo sync
         run: |
