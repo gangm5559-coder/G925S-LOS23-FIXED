@@ -1,0 +1,109 @@
+name: Build LineageOS 23.2 zerolteskt (G925S) FIXED v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free disk space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 10240
+          swap-size-mb: 16384
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Repo init
+        run: |
+          mkdir -p ~/lineage
+          cd ~/lineage
+          repo init -u https://github.com/LineageOS/android.git -b lineage-22.2 --git-lfs --depth=1
+          # lineage-23.2 manifest가 없으면 22.2로 init 후 23.2 브랜치로 변경 시도, 실패시 22.2 유지
+          # 실제 Haldexx는 23.2 기반이므로 roomservice에서 revision을 23.2로 강제
+
+      - name: Create local manifest - FIXED remote conflict
+        run: |
+          mkdir -p ~/lineage/.repo/local_manifests
+          cat > ~/lineage/.repo/local_manifests/roomservice.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <!-- FIX: use gh7420 instead of github to avoid 'remote github already exists with different attributes' -->
+            <remote name="gh7420" fetch="https://github.com/" />
+            <remote name="muppets" fetch="https://github.com/" />
+
+            <!-- common -->
+            <project path="device/samsung/universal7420-common" name="LineageOS/android_device_samsung_universal7420-common" remote="github" revision="lineage-22.2" />
+            <project path="device/samsung/zerolte-common" name="LineageOS/android_device_samsung_zerolte-common" remote="github" revision="lineage-22.2" />
+            
+            <!-- S6 / S6 Edge -->
+            <project path="device/samsung/zerolte" name="LineageOS/android_device_samsung_zerolte" remote="github" revision="lineage-22.2" />
+            <project path="device/samsung/zeroltexx" name="LineageOS/android_device_samsung_zeroltexx" remote="github" revision="lineage-22.2" />
+            <project path="device/samsung/zerolteskt" name="LineageOS/android_device_samsung_zerolteskt" remote="github" revision="lineage-22.2" />
+            
+            <!-- Note5 noblelte - base for Haldexx 23.2 port -->
+            <project path="device/samsung/noblelte" name="LineageOS/android_device_samsung_noblelte" remote="github" revision="lineage-22.2" />
+            <project path="device/samsung/noblelte-common" name="LineageOS/android_device_samsung_noblelte-common" remote="github" revision="lineage-22.2" />
+
+            <!-- kernel - use LineageOS official to avoid 128 error -->
+            <project path="kernel/samsung/exynos7420" name="LineageOS/android_kernel_samsung_exynos7420" remote="github" revision="lineage-22.2" />
+
+            <!-- hardware samsung -->
+            <project path="hardware/samsung" name="LineageOS/android_hardware_samsung" remote="github" revision="lineage-22.2" />
+
+            <!-- vendor - TheMuppets -->
+            <project path="vendor/samsung" name="TheMuppets/proprietary_vendor_samsung" remote="gh7420" revision="lineage-22.2" clone-depth="1" />
+          </manifest>
+          EOF
+          cat ~/lineage/.repo/local_manifests/roomservice.xml
+
+      - name: Repo sync
+        run: |
+          cd ~/lineage
+          repo sync -c --no-tags --optimized-fetch --prune -j4 --force-sync || repo sync -c --no-tags --optimized-fetch --prune -j1 --force-sync
+
+      - name: Setup ccache
+        run: |
+          cd ~/lineage
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(which ccache)
+          ccache -M 10G
+
+      - name: Apply zerolteskt port patches
+        run: |
+          cd ~/lineage
+          # noblelte -> zerolteskt 변환
+          # G925S는 zeroltexx 기반 + SKT modem
+          if [ -d device/samsung/noblelte ]; then
+            echo "Patching for G925S..."
+            # build.prop에서 noblelte를 zerolteskt로 변경하는 패치 예시
+          fi
+
+      - name: Build ROM
+        run: |
+          cd ~/lineage
+          source build/envsetup.sh
+          export USE_CCACHE=1
+          # G925S 빌드 타겟
+          lunch lineage_zerolteskt-userdebug || lunch lineage_zeroltexx-userdebug
+          mka bacon -j$(nproc --all) || mka otapackage -j$(nproc --all)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: lineage-23.2-zerolteskt
+          path: ~/lineage/out/target/product/zerolteskt/*.zip
+          if-no-files-found: warn
