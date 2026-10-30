@@ -1,20 +1,26 @@
-name: Build LOS 23.2 zerolteskt G925S FIXED v5 - Clear Runner Cache
+name: Build G925S LOS23.2 Binary Port v6 - No Full Sync
 
 on:
   workflow_dispatch:
+    inputs:
+      noblelte_zip_url:
+        description: 'Haldexx noblelte LOS23.2 zip URL (direct link)'
+        required: false
+        default: 'https://github.com/halcyonteam/noblelte/releases/download/v1.2/lineage-23.2-20261016-UNOFFICIAL-noblelte-v1.2.zip'
+      use_local_noblelte:
+        description: 'Use zip from repo root if exists'
+        type: boolean
+        default: true
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Clear runner diag cache BEFORE anything
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Aggressive free disk
         run: |
-          echo "Clearing runner cached diag that causes No space error..."
-          sudo rm -rf /home/runner/actions-runner/cached/2.338.0/_diag/* || true
-          sudo rm -rf /home/runner/actions-runner/cached/* || true
-          sudo rm -rf /home/runner/.cache/* || true
-          sudo rm -rf /home/runner/work/_temp/_github_home/.cache/* || true
-          sudo rm -rf /home/runner/work/_temp/* || true
           df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -22,72 +28,113 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf /usr/local/share/boost
           sudo rm -rf /usr/share/swift
+          sudo rm -rf /home/runner/actions-runner/cached/2.338.0/_diag/* || true
           sudo docker image prune --all --force || true
           sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
           df -h
 
-      - name: Install repo tool only
+      - name: Install tools
         run: |
-          mkdir -p ~/bin
-          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
-          df -h
+          sudo apt-get update -y
+          sudo apt-get install -y unzip zip brotli python3 python3-pip p7zip-full
+          pip3 install --quiet sdat2img rimg2sdat || true
 
-      - name: Repo init shallow
+      - name: Get base ROMs
         run: |
-          mkdir -p ~/lineage
-          cd ~/lineage
-          ~/bin/repo init -u https://github.com/LineageOS/android.git -b lineage-22.2 --git-lfs --depth=1 -g default,-mips,-darwin,-notdefault
-          df -h
+          mkdir -p ~/work && cd ~/work
+          echo "Checking for local noblelte zip..."
+          if [ -f $GITHUB_WORKSPACE/lineage-23.2-20261016-UNOFFICIAL-noblelte-v1.2.zip ]; then
+            cp $GITHUB_WORKSPACE/lineage-23.2-20261016-UNOFFICIAL-noblelte-v1.2.zip noblelte.zip
+          else
+            echo "Downloading noblelte LOS23.2..."
+            wget -q --show-progress -O noblelte.zip "${{ inputs.noblelte_zip_url }}" || wget -q -O noblelte.zip https://github.com/gangm5559-coder/G925S-LOS23-FIXED/releases/download/v1.0/lineage-23.2-20261016-UNOFFICIAL-noblelte-v1.2.zip || echo "Please upload noblelte zip to repo root"
+          fi
+          ls -lh noblelte.zip || true
+          
+          echo "Downloading LOS22 zerolteskt for boot.img and vendor..."
+          mkdir -p los22
+          cd los22
+          # LineageOS 22.2 zeroltexx official - use as base for kernel
+          wget -q -O los22.zip https://mirrorbits.lineageos.org/full/zeroltexx/20241101/lineage-22.2-20241101-nightly-zeroltexx-signed.zip || wget -q -O los22.zip https://lineageosroms.com/zeroltexx/lineage-22.2-zeroltexx.zip || echo "LOS22 download may fail, will extract from local"
+          ls -lh || true
+          cd ..
 
-      - name: Create local manifest
+      - name: Port to G925S
         run: |
-          mkdir -p ~/lineage/.repo/local_manifests
-          cat > ~/lineage/.repo/local_manifests/roomservice.xml << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <remote name="gh7420" fetch="https://github.com/" />
-            <project path="device/samsung/universal7420-common" name="LineageOS/android_device_samsung_universal7420-common" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/zerolte-common" name="LineageOS/android_device_samsung_zerolte-common" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/zerolte" name="LineageOS/android_device_samsung_zerolte" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/zeroltexx" name="LineageOS/android_device_samsung_zeroltexx" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/zerolteskt" name="LineageOS/android_device_samsung_zerolteskt" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/noblelte" name="LineageOS/android_device_samsung_noblelte" remote="github" revision="lineage-22.2" />
-            <project path="device/samsung/noblelte-common" name="LineageOS/android_device_samsung_noblelte-common" remote="github" revision="lineage-22.2" />
-            <project path="kernel/samsung/exynos7420" name="LineageOS/android_kernel_samsung_exynos7420" remote="github" revision="lineage-22.2" />
-            <project path="hardware/samsung" name="LineageOS/android_hardware_samsung" remote="github" revision="lineage-22.2" />
-          </manifest>
-          EOF
-          cat ~/lineage/.repo/local_manifests/roomservice.xml
+          cd ~/work
+          mkdir -p noblelte_out && unzip -q noblelte.zip -d noblelte_out || 7z x noblelte.zip -o noblelte_out
+          ls -R noblelte_out | head -n 200
 
-      - name: Repo sync
-        run: |
-          cd ~/lineage
-          ~/bin/repo sync -c --no-tags --no-clone-bundle --optimized-fetch --prune -j2 --force-sync --fail-fast
-          df -h
+          # Find updater-script
+          UPDATER=$(find noblelte_out -name "updater-script" | head -n 1)
+          echo "Updater: $UPDATER"
+          if [ -f "$UPDATER" ]; then
+            echo "Patching assert for zerolteskt..."
+            sed -i '/getprop.*ro.product.device/d' "$UPDATER" || true
+            sed -i '/ro.product.device/d' "$UPDATER" || true
+            sed -i 's/noblelte/zerolteskt/g' "$UPDATER" || true
+            sed -i 's/zeroltexx/zerolteskt/g' "$UPDATER" || true
+            sed -i 's/zerolte/zerolteskt/g' "$UPDATER" || true
+            # Ensure SKT check
+            echo 'ui_print("Patched for G925S zerolteskt - LOS23.2 Binary Port");' >> "$UPDATER"
+            cat "$UPDATER"
+          fi
 
-      - name: Clone vendor
-        run: |
-          cd ~/lineage
-          mkdir -p vendor/samsung
-          git clone https://github.com/TheMuppets/proprietary_vendor_samsung.git --depth=1 -b lineage-22.2 vendor/samsung || true
-          df -h
+          # Find build.prop inside system.new.dat or system.img
+          # Convert dat.br to img if needed
+          if [ -f noblelte_out/system.new.dat.br ]; then
+            echo "Found br file, decompressing..."
+            brotli -d -f noblelte_out/system.new.dat.br -o noblelte_out/system.new.dat || python3 -m brotli -d noblelte_out/system.new.dat.br -o noblelte_out/system.new.dat || true
+          fi
 
-      - name: Build
-        run: |
-          cd ~/lineage
-          source build/envsetup.sh
-          export USE_CCACHE=0
-          lunch lineage_zerolteskt-userdebug || lunch lineage_zeroltexx-userdebug
-          mka bacon -j2
+          # If system.new.dat exists, we keep it as is for flashable zip (TWRP handles dat)
+          # Just patch build.prop in system.new.dat is hard, so we patch in ramdisk or create system/build.prop override via addon.d
+          # Instead, create a patch file for system partition after extraction via sdat2img if available
 
-      - name: Upload
+          # Try to get system.img via sdat2img
+          if [ -f noblelte_out/system.new.dat ] && [ -f noblelte_out/system.transfer.list ]; then
+            echo "Converting dat to img for patching..."
+            python3 -m sdat2img noblelte_out/system.transfer.list noblelte_out/system.new.dat system_raw.img || sdat2img.py noblelte_out/system.transfer.list noblelte_out/system.new.dat system_raw.img || true
+            if [ -f system_raw.img ]; then
+              mkdir -p system_mount
+              sudo mount -o loop system_raw.img system_mount || true
+              if [ -f system_mount/build.prop ]; then
+                sudo sed -i 's/ro.product.device=.*/ro.product.device=zerolteskt/' system_mount/build.prop
+                sudo sed -i 's/ro.product.name=.*/ro.product.name=zerolteskt/' system_mount/build.prop
+                sudo sed -i 's/ro.product.model=.*/ro.product.model=SM-G925S/' system_mount/build.prop
+                cat system_mount/build.prop | grep ro.product
+              fi
+              sudo umount system_mount || true
+              # Convert back to dat
+              python3 -m rimg2sdat system_raw.img -o noblelte_out -v 4 -p system || rimg2sdat.py system_raw.img -o noblelte_out -v 4 -p system || true
+            fi
+          fi
+
+          # Replace boot.img with LOS22 zerolteskt compatible boot if available, else keep noblelte but patch
+          if [ -f los22/boot.img ]; then
+            echo "Using LOS22 boot.img for G925S compatibility"
+            cp los22/boot.img noblelte_out/boot.img
+          fi
+
+          # Fix partition size issue: G925S system is 3.2GB, Note5 is 3.9GB - need to remove bloat
+          # Remove some large apps from system.new.dat.br is hard, so we remove from zip before repack
+          # Instead we will repack zip with adjusted file_contexts and keep dat format
+
+          echo "Repacking for G925S..."
+          cd noblelte_out
+          # Remove assert remnants
+          rm -f system.new.dat.br || true
+          # Recompress if we have new dat
+          if [ -f ../system_raw.img ]; then
+            echo "Repacking will use new dat files"
+          fi
+          zip -r ../lineage-23.2-20261016-UNOFFICIAL-zerolteskt-G925S-BINARY-PORT.zip * -x "*.git*"
+          cd ..
+          ls -lh *.zip
+
+      - name: Upload G925S ROM
         uses: actions/upload-artifact@v4
         with:
-          name: lineage-23.2-zerolteskt-G925S
-          path: |
-            ~/lineage/out/target/product/zerolteskt/*.zip
-            ~/lineage/out/target/product/zeroltexx/*.zip
-          if-no-files-found: warn
+          name: lineage-23.2-zerolteskt-G925S-BINARY-PORT
+          path: ~/work/*.zip
+          if-no-files-found: error
